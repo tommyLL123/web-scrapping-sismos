@@ -10,16 +10,12 @@ provider:
   iam:
     role: arn:aws:iam::294858368654:role/LabRole
 
-plugins:
-  - serverless-python-requirements
-
-custom:
-  pythonRequirements:
-    dockerizePip: non-linux # Opcional, pero recomendado si compilas desde Windows/Mac para empaquetar correctamente para Linux (Lambda)
-
 functions:
   scrape_table:
-    handler: scrap_table.lambda_handler  # Asegurarse de que el nombre del archivo y la función coincidan
+    handler: scrap_table.lambda_handler  # Asegúrarse de que el nombre del archivo y la función coincidan
+    package:
+      include:
+        - ./**  # Incluir todo el contenido del directorio
     events:
       - http:
           path: /scrape/table
