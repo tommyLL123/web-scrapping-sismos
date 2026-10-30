@@ -12,6 +12,7 @@ provider:
 custom:
   pythonRequirements:
     dockerizePip: non-linux # Recomendado para compilar correctamente la librería en el entorno Lambda
+    pythonBin: python
 
 functions:
   scrape_table:
