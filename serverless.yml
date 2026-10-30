@@ -4,15 +4,21 @@ service: api-web-scraping
 provider:
   name: aws
   runtime: python3.12
-  # Default memory size for functions (default: 1024MB)
   memorySize: 1024
   timeout: 30
   iam:
     role: arn:aws:iam::294858368654:role/LabRole
 
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    dockerizePip: non-linux # Recomendado para compilar correctamente la librería en el entorno Lambda
+
 functions:
   scrape_table:
-    handler: scrap_table.lambda_handler  # Asegúrarse de que el nombre del archivo y la función coincidan
+    handler: scrap_table_2.lambda_handler  # Asegúrate de que coincida con el nombre de tu archivo .py
     package:
       include:
         - ./**  # Incluir todo el contenido del directorio
@@ -28,7 +34,7 @@ resources:
     TablaWebScrapping:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: TablaWebScrappingSismos
+        TableName: TablaSismosIGP  # Actualizado para coincidir con tu nuevo código Python
         AttributeDefinitions:
           - AttributeName: id
             AttributeType: S
