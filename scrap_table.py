@@ -1,66 +1,99 @@
-import requests
-from bs4 import BeautifulSoup
-import boto3
+import json
 import uuid
+from datetime import datetime
+
+import boto3
+import requests
+
+LIMITE = None   # None = guardar todos los reportes del año | 10 = solo los 10 últimos
+URL = "https://ultimosismo.igp.gob.pe/api/ultimo-sismo/ajaxb/{anio}"
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0',
+    'Accept': '*/*',
+    'Referer': 'https://ultimosismo.igp.gob.pe/productos/reportes-sismicos'
+}
+
+
+def obtener_sismos(anio):
+    response = requests.get(URL.format(anio=anio), headers=HEADERS, timeout=20)
+    if response.status_code != 200:
+        return response.status_code, None
+    data = response.json()
+    if isinstance(data, dict):                       # por si viene envuelto
+        data = data.get('data') or data.get('sismos') or []
+    return 200, data
+
+
+def clave_orden(s):
+    """Más reciente primero: fecha local + hora local + código del reporte."""
+    fecha = str(s.get('fecha_local') or s.get('fecha_utc') or '')[:10]
+    hora = str(s.get('hora_local') or s.get('hora_utc') or '')
+    hora = hora[11:19] if 'T' in hora else hora[:8]
+    codigo = str(s.get('codigo') or s.get('reporte') or s.get('id') or '')
+    return (fecha, hora, codigo)
+
+
+def a_item(sismo):
+    """DynamoDB no acepta float ni vacíos: todo a string."""
+    item = {}
+    for k, v in sismo.items():
+        if v is None or v == '':
+            continue
+        item[k] = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+    return item
+
 
 def lambda_handler(event, context):
-    # URL de la página web que contiene la tabla
-    url = "https://ultimosismo.igp.gob.pe/productos/reportes-sismicos"
-
-    # Realizar la solicitud HTTP a la página web
-    response = requests.get(url)
-    if response.status_code != 200:
+    # Solicitar los datos del año actual
+    anio = datetime.now().year
+    status, sismos = obtener_sismos(anio)
+    if status != 200:
         return {
-            'statusCode': response.status_code,
+            'statusCode': status,
             'body': 'Error al acceder a la página web'
         }
-
-    # Parsear el contenido HTML de la página web
-    soup = BeautifulSoup(response.content, 'html.parser')
-
-    # Encontrar la tabla en el HTML
-    table = soup.find('table')
-    if not table:
+    if not sismos:
         return {
             'statusCode': 404,
-            'body': 'No se encontró la tabla en la página web'
+            'body': 'No se encontraron sismos en la respuesta'
         }
 
-    # Extraer los encabezados de la tabla
-    headers = [header.text.strip() for header in table.find_all('th')]
+    # Ordenar del más reciente al más antiguo (y limitar si corresponde)
+    sismos = sorted(sismos, key=clave_orden, reverse=True)
+    if LIMITE:
+        sismos = sismos[:LIMITE]
 
-    # Extraer las filas de la tabla (Limitado a los últimos 10 sismos)
-    rows = []
-    # El índice 1:11 toma exactamente 10 elementos saltando el encabezado
-    for row in table.find_all('tr')[1:11]:  
-        cells = row.find_all('td')
-        # Se ajusta el mapeo de columnas asegurando que no haya desbordamiento
-        rows.append({headers[i]: cell.text.strip() for i, cell in enumerate(cells) if i < len(headers)})
-
-    # Guardar los datos en DynamoDB
     dynamodb = boto3.resource('dynamodb')
-    table_db = dynamodb.Table('TablaWebScrappingSismos')
+    table = dynamodb.Table('TablaSismosIGP')
 
     # Eliminar todos los elementos de la tabla antes de agregar los nuevos
-    scan = table_db.scan()
-    with table_db.batch_writer() as batch:
-        for each in scan.get('Items', []):
-            batch.delete_item(
-                Key={
-                    'id': each['id']
-                }
-            )
+    # (el scan está paginado: devuelve máx. 1 MB por llamada)
+    items_viejos = []
+    scan = table.scan()
+    items_viejos.extend(scan['Items'])
+    while 'LastEvaluatedKey' in scan:
+        scan = table.scan(ExclusiveStartKey=scan['LastEvaluatedKey'])
+        items_viejos.extend(scan['Items'])
 
-    # Insertar los nuevos datos
+    with table.batch_writer() as batch:
+        for each in items_viejos:
+            batch.delete_item(Key={'id': each['id']})
+
+    # Insertar los nuevos datos (batch_writer agrupa en lotes de 25)
+    rows = []
     i = 1
-    for row in rows:
-        row['orden'] = i  # Mejor usar 'orden' que '#' para atributos de DynamoDB
-        row['id'] = str(uuid.uuid4())  # Generar un ID único para cada entrada
-        table_db.put_item(Item=row)
-        i = i + 1
+    with table.batch_writer() as batch:
+        for sismo in sismos:
+            row = a_item(sismo)
+            row['#'] = i
+            row['id'] = str(uuid.uuid4())  # ID único (reemplaza el id del IGP)
+            batch.put_item(Item=row)
+            rows.append(row)
+            i = i + 1
 
-    # Retornar el resultado como JSON
+    # Retornar un resumen (no los 758 registros, para que la respuesta sea corta)
     return {
         'statusCode': 200,
-        'body': rows
+        'total': len(rows),
+        'body': rows[:10]
     }
