@@ -16,7 +16,7 @@ custom:
 
 functions:
   scrape_table:
-    handler: scrap_table_2.lambda_handler  # Asegúrate de que coincida con el nombre de tu archivo .py
+    handler: scrap_table.lambda_handler  # Asegúrate de que coincida con el nombre de tu archivo .py
     package:
       include:
         - ./**  # Incluir todo el contenido del directorio
